@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Functions and classes related to optimization (weight updates)."""
+"""Functions and classes related to optimization (training)."""
 
 from __future__ import absolute_import
 from __future__ import division
@@ -23,7 +23,18 @@ import tensorflow as tf
 
 
 def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu):
-  """Creates an optimizer training op."""
+  """Creates an optimizer training op.
+
+  Args:
+    loss: The scalar loss tensor to minimize.
+    init_lr: Initial learning rate (float).
+    num_train_steps: Total number of training steps (int).
+    num_warmup_steps: Number of linear warmup steps (int).
+    use_tpu: Whether to use TPU-compatible optimizer (bool).
+
+  Returns:
+    A training op that updates variables to minimize loss.
+  """
   global_step = tf.train.get_or_create_global_step()
 
   learning_rate = tf.constant(value=init_lr, shape=[], dtype=tf.float32)
@@ -38,7 +49,7 @@ def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu):
       cycle=False)
 
   # Implements linear warmup. I.e., if global_step < num_warmup_steps, the
-  # learning rate will be `global_step/num_warmup_steps * init_lr`.
+  # learning rate will be `global_step / num_warmup_steps * init_lr`.
   if num_warmup_steps:
     global_steps_int = tf.cast(global_step, tf.int32)
     warmup_steps_int = tf.constant(num_warmup_steps, dtype=tf.int32)
@@ -70,7 +81,7 @@ def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu):
   tvars = tf.trainable_variables()
   grads = tf.gradients(loss, tvars)
 
-  # This is how the model was pre-trained.
+  # Clip gradients by global norm to prevent exploding gradients.
   (grads, _) = tf.clip_by_global_norm(grads, clip_norm=1.0)
 
   train_op = optimizer.apply_gradients(
@@ -78,14 +89,18 @@ def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu):
 
   # Normally the global step update is done inside of `apply_gradients`.
   # However, `AdamWeightDecayOptimizer` doesn't do this. But if you use
-  # a different optimizer, you should probably take this line out.
+  # a different optimizer, you should remove this line.
   new_global_step = global_step + 1
   train_op = tf.group(train_op, [global_step.assign(new_global_step)])
   return train_op
 
 
 class AdamWeightDecayOptimizer(tf.train.Optimizer):
-  """A basic Adam optimizer that includes "correct" L2 weight decay."""
+  """A basic Adam optimizer that includes correct L2 weight decay.
+
+  This optimizer applies weight decay to all parameters except those
+  specified in `exclude_from_weight_decay` (e.g., biases and layer norms).
+  """
 
   def __init__(self,
                learning_rate,
@@ -128,21 +143,14 @@ class AdamWeightDecayOptimizer(tf.train.Optimizer):
           initializer=tf.zeros_initializer())
 
       # Standard Adam update.
-      next_m = (
-          tf.multiply(self.beta_1, m) + tf.multiply(1.0 - self.beta_1, grad))
-      next_v = (
-          tf.multiply(self.beta_2, v) + tf.multiply(1.0 - self.beta_2,
-                                                    tf.square(grad)))
+      next_m = (tf.multiply(self.beta_1, m) +
+                tf.multiply(1.0 - self.beta_1, grad))
+      next_v = (tf.multiply(self.beta_2, v) +
+                tf.multiply(1.0 - self.beta_2, tf.square(grad)))
 
       update = next_m / (tf.sqrt(next_v) + self.epsilon)
 
-      # Just adding the square of the weights to the loss function is *not*
-      # the correct way of using L2 regularization/weight decay with Adam,
-      # since that will interact with the m and v parameters in strange ways.
-      #
-      # Instead we want ot decay the weights in a manner that doesn't interact
-      # with the m/v parameters. This is equivalent to adding the square
-      # of the weights to the loss with plain (non-momentum) SGD.
+      # Apply weight decay for parameters not excluded.
       if self._do_use_weight_decay(param_name):
         update += self.weight_decay_rate * param
 
