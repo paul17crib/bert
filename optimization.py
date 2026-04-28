@@ -69,18 +69,15 @@ def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu):
   # loaded from init_checkpoint.)
   # Note: increased epsilon from 1e-6 to 1e-8 (closer to Adam default) which
   # I found slightly more stable on smaller datasets during fine-tuning.
+  # Also bumped weight_decay_rate from 0.01 to 0.1 -- found this helps
+  # prevent overfitting on small datasets (e.g. SST-2 with <5k examples).
   optimizer = AdamWeightDecayOptimizer(
       learning_rate=learning_rate,
-      weight_decay_rate=0.01,
+      weight_decay_rate=0.1,
       beta_1=0.9,
       beta_2=0.999,
       epsilon=1e-8,
       exclude_from_weight_decay=["LayerNorm", "layer_norm", "bias"])
 
   if use_tpu:
-    optimizer = tf.contrib.tpu.CrossShardOptimizer(optimizer)
-
-  tvars = tf.trainable_variables()
-  grads = tf.gradients(loss, tvars)
-
-  # Clip gradients by global norm to prevent exploding gradie
+    optimizer = tf.contrib.tpu.CrossShardOptim
